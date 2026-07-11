@@ -1,12 +1,13 @@
 import telebot
 import psycopg2
-from datetime import datetime, timedelta
-import time
-import threading
+from datetime import datetime
 import os
+from apscheduler.schedulers.background import BackgroundScheduler
+import pytz
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_ID = 1234567890  # ЗАМІНИ НА СВІЙ CHAT_ID
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -21,8 +22,10 @@ def init_db():
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
             phone VARCHAR(20),
-            date DATE,
-            next_service DATE,
+            address VARCHAR(255),
+            equipment VARCHAR(255),
+            install_date DATE,
+            service_date DATE,
             chat_id BIGINT
         )
     """)
@@ -34,50 +37,83 @@ init_db()
 
 @bot.message_handler(commands=['start'])
 def start(msg):
-    bot.send_message(msg.chat.id, "Привіт 👋 Напиши:\nІм'я, телефон, дата (YYYY-MM-DD)")
+    bot.send_message(msg.chat.id, 
+        "👋 Привіт! Додай клієнта:\n\n"
+        "Ім'я, Телефон, Адреса, Обладнання, Дата встановлення (YYYY-MM-DD), Дата ТО (YYYY-MM-DD)")
 
 @bot.message_handler(func=lambda m: True)
 def add_client(msg):
     try:
-        name, phone, date = [x.strip() for x in msg.text.split(",")]
-        next_service = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=180)).strftime("%Y-%m-%d")
+        parts = [x.strip() for x in msg.text.split(",")]
+        if len(parts) != 6:
+            raise ValueError("Невірна кількість параметрів")
+        
+        name, phone, address, equipment, install_date, service_date = parts
+        
+        datetime.strptime(install_date, "%Y-%m-%d")
+        datetime.strptime(service_date, "%Y-%m-%d")
         
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO clients (name, phone, date, next_service, chat_id)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (name, phone, date, next_service, msg.chat.id))
+            INSERT INTO clients (name, phone, address, equipment, install_date, service_date, chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (name, phone, address, equipment, install_date, service_date, msg.chat.id))
         conn.commit()
         cursor.close()
         conn.close()
         
-        bot.send_message(msg.chat.id, f"✅ Додано. Наступне ТО: {next_service}")
-    except:
-        bot.send_message(msg.chat.id, "❌ Формат: Ім'я, телефон, 2026-07-12")
+        bot.send_message(msg.chat.id, f"✅ Клієнт {name} додан!\n📅 ТО: {service_date}")
+        
+    except ValueError:
+        bot.send_message(msg.chat.id, 
+            "❌ Формат:\nІм'я, Телефон, Адреса, Обладнання, 2024-01-15, 2025-01-15")
+    except Exception as e:
+        bot.send_message(msg.chat.id, f"❌ Помилка: {str(e)}")
 
-def check_reminders():
-    while True:
-        try:
-            conn = get_db()
-            cursor = conn.cursor()
-            today = datetime.now().strftime("%Y-%m-%d")
+def send_daily_reminders():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        cursor.execute("""
+            SELECT name, phone, address, equipment, service_date, chat_id 
+            FROM clients 
+            WHERE service_date = %s
+        """, (today,))
+        
+        clients = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        for name, phone, address, equipment, service_date, chat_id in clients:
+            # ТОБІ
+            admin_msg = (
+                f"🔔 <b>ТЕХНІЧНЕ ОБСЛУГОВУВАННЯ</b>\n\n"
+                f"👤 {name}\n"
+                f"📱 {phone}\n"
+                f"📍 {address}\n"
+                f"🔧 {equipment}"
+            )
+            try:
+                bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML")
+            except:
+                pass
             
-            cursor.execute("SELECT name, chat_id FROM clients WHERE next_service = %s", (today,))
-            clients = cursor.fetchall()
-            
-            cursor.close()
-            conn.close()
-            
-            for name, chat_id in clients:
+            # КЛІЄНТУ
+            if chat_id and chat_id != ADMIN_ID:
+                client_msg = f"🔔 {name}, час вашого ТО!\n📍 {address}\n🔧 {equipment}"
                 try:
-                    bot.send_message(chat_id, f"🔔 {name} — час техогляду")
+                    bot.send_message(chat_id, client_msg)
                 except:
                     pass
-        except:
-            pass
-        
-        time.sleep(86400)
+    
+    except:
+        pass
 
-threading.Thread(target=check_reminders, daemon=True).start()
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_daily_reminders, 'cron', hour=9, minute=0, timezone='Europe/Kyiv')
+scheduler.start()
+
 bot.infinity_polling()
