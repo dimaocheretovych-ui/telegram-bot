@@ -7,7 +7,7 @@ import pytz
 
 TOKEN = os.getenv("TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_ID = 1234567890  # ЗАМІНИ НА СВІЙ CHAT_ID
+ADMIN_ID = 8686989797  # ЗАМІНИ НА СВІЙ CHAT_ID
 
 bot = telebot.TeleBot(TOKEN)
 
