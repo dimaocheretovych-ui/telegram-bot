@@ -17,8 +17,11 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    # DROP старої таблиці якщо вона існує
+    cursor.execute("DROP TABLE IF EXISTS clients CASCADE")
+    # Створи нову з усіма колонами
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clients (
+        CREATE TABLE clients (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255),
             phone VARCHAR(20),
